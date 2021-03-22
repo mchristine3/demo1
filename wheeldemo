@@ -1,0 +1,461 @@
+/*  NAME: Kris Flatt
+ *  COURSE: EENG 350 C
+ *  ASSIGNMENT: Demo 1
+ *  FileName: Two wheels with encoder
+ *  Last Modified: 1600hrs 17 March 2021
+ *  
+ *  Description: 
+ *  
+ *  Circuit Set-up: The motor has 6 wires for input/output control, you can consult the documentation for 
+ *  the motor used in this assignment here: https://www.pololu.com/product/2824. For the Arduino, the most important
+ *  pins for the motor are the Yellow and White wires, they are Channel A and B of the encoder repectively. Make sure
+ *  those are connected to the proper I/O pins on the Arduino. The Green and Blue wires connect to Ground and 5V on the 
+ *  Arduino respectively. For this assignment, the Red and Black wires are the +7.2 volts and ground of the battery to
+ *  the motor. Mode description on the wiring of the circuit can be found here: https://www.pololu.com/docs/0J55/3.c 
+ *  
+ *  PIN ASSIGNMENTS on the Arduino
+ *  D2 - External Interrrupt for Right Motor (Right Motor Channel A)
+ *  D3 - External Interrupt for Left Motor (Left Motor Channel A)
+ *  D4 - Fault Check
+ *  D5 - Right Motor Channel B
+ *  D6 - Left Motor Channel B
+ *  D7 - Left Motor Voltage
+ *  D8 - Right Motor Voltage
+ *  D9 - Left Motor Direction
+ *  D10 - Right Motor Direction
+ *  D12 - Status Flag (Fault)
+ *  
+ *  Motor Cable Bus Color Code
+ *  Yellow - Channel A
+ *  White - Channel B
+ *  Blue - V_cc or V_dd (5 Volts)
+ *  Green - GND
+ *  Red - Motor(+)
+ *  Black - Motor(-)
+ *  
+ *  Documentation: 
+ *  I received help from the following people and sources:
+ *  https://forum.arduino.cc/index.php?topic=288234.0   Simple example on Serial.read()
+ *  https://www.pololu.com/product/2824                 Data sheet for the motor
+ *  https://www.pololu.com/docs/0J55/3.c                Data sheet and connections for the motor and Arduino
+ *  http://www.pjrc.com/teensy/td_libs_Encoder.html     Link to download Encoder.h library, crucial for this program
+ */
+
+/* Encoder Library - Basic Example
+ * http://www.pjrc.com/teensy/td_libs_Encoder.html
+ * Download the library Encoder.h from here for this program to execute 
+ * This example code is in the public domain.
+ */
+ 
+ #include <Encoder.h>
+
+// Change these two numbers to the pins connected to your encoder.
+//   Best Performance: both pins have interrupt capability
+//   Good Performance: only the first pin has interrupt capability
+//   Low Performance:  neither pin has interrupt capability
+Encoder rightWheel(2, 5);
+Encoder leftWheel(3, 6);
+//   avoid using pins with LEDs attached
+
+#define enable 4            // This is the enable pin, turning both motors on/off
+#define right_voltageSign 8    // this you can set this pin either HIGH (CW spin) or LOW (CCW spin) using a digitalWrite()
+#define right_analogPin 10     // set the speed of rotation by setting the PWM value (0-255)
+#define left_voltageSign 7
+#define left_analogPin 9
+
+const long count_per_rev = 3200;                    // number of counts per revolution using Encoder.h file
+const float pi = 3.14159;                           // value of pi to 5 decimal places
+const int sample_rate = 50;                         // sampling time of the main program in milliseconds
+const float pwm_per_volt = 22.22222;                 // ratio of pwm(255) to motor voltage(7.2)
+//ANGLE
+float r_k_p_a = 0.97;                  // volts per degree of the right motor                        old value = 1.01
+float r_k_i_a = 0.015;                 // units of volt per degree per second of the right motor     old value = 0.04
+float l_k_p_a = 0.68;                               // volts per degree of the left motor                         old value = 0.73
+float l_k_i_a = 0.015;                        // units of volt per degree per second of the left motor      old value = 0.03
+//DRIVE
+float r_k_p_d = .98;                  // volts per degree of the right motor                        old value = 1.01
+float r_k_i_d = 0.0000;                 // units of volt per degree per second of the right motor     old value = 0.04
+float l_k_p_d = 0.86;                               // volts per degree of the left motor                         old value = 0.73
+float l_k_i_d = 0.0000;                        // units of volt per degree per second of the left motor      old value = 0.03
+const float wheel_radius = 7.29;                        // centimeters
+const float wheel_dist = 29.5275;                       // centimeters
+float wheel_circumference = 2 * pi * wheel_radius;      // wheel circumference in cm
+
+long newRight;
+long newLeft;
+
+float radian_per_count = (float) (2.0 * pi) / count_per_rev;
+float radian_desired = 0.0;
+float left_radian_actual = 0.0;
+float right_radian_actual = 0.0;
+float left_radian_per_second = 0.0;
+float right_radian_per_second = 0.0;
+
+int count = 0;
+
+float current_time = 0.0;
+
+int left_pwmNum = 0;
+int right_pwmNum = 0;
+int left_spin_dir;
+int right_spin_dir;
+float right_error = 0.0;
+float left_error = 0.0;
+
+float left_radian_old = 0.0;
+float right_radian_old = 0.0;
+float left_integral = 0.0;
+float right_integral = 0.0;
+float desiredAng = 180;
+float dd = 1;
+float distance = 0;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(enable, OUTPUT);
+  pinMode(left_voltageSign, OUTPUT);
+  pinMode(right_voltageSign, OUTPUT);
+  pinMode(left_analogPin, OUTPUT);
+  pinMode(right_analogPin, OUTPUT);
+  pinMode(12, INPUT);
+  if (desiredAng < 0.0) {
+    //ANGLE
+    r_k_p_a = 1.;    //1.5              // volts per degree of the right motor                        old value = 1.01
+    r_k_i_a = 0.004;     //.004            // units of volt per degree per second of the right motor     old value = 0.04
+    l_k_p_a = 1;      //1                          // volts per degree of the left motor                         old value = 0.73
+    l_k_i_a = 0.004;
+  }
+  else {
+    r_k_p_a = 1.25;    //1.5              // volts per degree of the right motor                        old value = 1.01
+    r_k_i_a = 0.00004;     //.004            // units of volt per degree per second of the right motor     old value = 0.04
+    l_k_p_a = 1.6;      //1                          // volts per degree of the left motor                         old value = 0.73
+    l_k_i_a = 0.3;
+  }
+
+  if (dd == 1.0) {
+    //ANGLE
+    r_k_p_d = 1.3;                  // volts per degree of the right motor                        old value = 1.01
+    r_k_i_d = 0.0015;                 // units of volt per degree per second of the right motor     old value = 0.04
+    l_k_p_d = 1.1;                               // volts per degree of the left motor                         old value = 0.73
+    l_k_i_d = 0.0015;
+  }
+  else if(dd == 3.0){
+    r_k_p_d = 1.09;                  // volts per degree of the right motor                        old value = 1.01
+    r_k_i_d = 0.015;                 // units of volt per degree per second of the right motor     old value = 0.04
+    l_k_p_d = .926;                               // volts per degree of the left motor                         old value = 0.73
+    l_k_i_d = 0.015;
+  }
+  else if(dd == 5.0){
+    r_k_p_d = .98;                  // volts per degree of the right motor                        old value = 1.01
+    r_k_i_d = 0.0;                 // units of volt per degree per second of the right motor     old value = 0.04
+    l_k_p_d = .93;                               // volts per degree of the left motor                         old value = 0.73
+    l_k_i_d = 0.0;
+  }
+  else {
+  r_k_p_d = .984;                  // volts per degree of the right motor                        old value = 1.01
+  r_k_i_d = 0.0015;                 // units of volt per degree per second of the right motor     old value = 0.04
+  l_k_p_d = 0.82;                               // volts per degree of the left motor                         old value = 0.73
+  l_k_i_d = 0.0015;
+  }
+  digitalWrite(enable, HIGH);
+  turn_fcn(desiredAng);
+  rightWheel.write(0);
+  leftWheel.write(0);
+  
+  drive_fcn(dd);                       // calls he function for drive, with a parameter of feet, which gets converted into the number of radians the wheels must rotate
+  // because it is in the setup(), it will only execute one time, or every time you press the RESET on the Arduino board
+}
+
+long oldRight = -999;                 // part of encoder.h, leave these alone
+long oldLeft = -999;
+
+void loop() {
+
+}
+
+void drive_fcn(int dist) {
+
+  //----------------------------------------------------------------------------------------------------------------
+  // sets the value for the sum of all error to zero, to avoid integration wind-up
+  // sets the current position of the wheels to zero
+  left_integral = 0.0;
+  right_integral = 0.0;
+  left_radian_actual = 0.0;
+  right_radian_actual = 0.0;
+  right_error = 0.0;
+  left_error = 0.0;
+
+
+  //------------------------------------------------------------------------------------------------------------------
+  // conversion of the desired distance from feet to radians
+  // radians = distance(in feet) * 12(in/ft) * 2.54(cm/in) / wheel circumference * 2 * pi
+  float radial_dist = dist * 12 * 2.54 / wheel_circumference * 2 * pi;
+
+  //------------------------------------------------------------------------------------------------------------------
+  // while-loop inplementing the control-feedback loop for the wheels
+  // will continue to loop until the lefft and right wheels are within 0.05 radians of the desired distance
+  while( abs(radial_dist - abs(left_radian_actual)) > 0.05 && abs(radial_dist - abs(right_radian_actual)) > 0.05){
+    
+  long time_old = micros();
+  int delta_t = 0;
+  float micros_to_millis = 0.0;
+  
+  // Calcualtion of the motor voltage and PWM value determined by theta_error, which is the difference between theta_desired and
+  // theta_actual
+  // left_radian_old = left_radian_actual;
+  // right_radian_old = right_radian_actual;
+  
+  right_error = radial_dist - right_radian_actual;
+  left_error = radial_dist - left_radian_actual;
+
+  left_integral = left_integral + (left_error * sample_rate / 1000);
+  right_integral = right_integral + (right_error * sample_rate / 1000);
+
+  float left_motor_volts = (float) left_error * (l_k_p_d + (left_integral * l_k_i_d)); 
+  float right_motor_volts = (float) right_error * (r_k_p_d + (right_integral * r_k_i_d));
+
+  // determines the direction of the spin of the wheels, a positive value for the motor voltage will result in clockwise spin
+  // while a negative voltage will result in a CCW spin
+  if(left_motor_volts < 0.0){
+    left_spin_dir = LOW;
+    } 
+    else {
+      left_spin_dir = HIGH;
+   }
+
+  if(right_motor_volts > 0.0){
+    right_spin_dir = HIGH;
+    } 
+    else {
+      right_spin_dir = LOW;
+   }
+
+   // Use this 'if' statement to act as a limiter to of the calculation of the motor voltage
+   // for the purpose of this assignment, the maximum voltage to the motor from the battery is 7.2 volts
+   // therefore, if the calculation of the motor voltage is greater than +7.2 volts or less than -7.2 volts,
+   // the voltage is limited to the maximum voltae available from the battery
+    if(left_motor_volts > 7.2){
+      left_motor_volts = 7.2;
+    } else if(left_motor_volts < -7.2){ 
+      left_motor_volts = -7.2;
+    }
+    if(right_motor_volts > 7.2){
+      right_motor_volts = 7.2;
+    } else if(right_motor_volts < -7.2){ 
+      right_motor_volts = -7.2;
+    }
+
+  // The PWM value must be a positive integer from 0-255. So the calculation need the absolute value of the motor voltage
+  // multiplied by the unit conversion of PWM value per volt
+  left_pwmNum = abs(left_motor_volts) * pwm_per_volt;
+  right_pwmNum = abs(right_motor_volts) * pwm_per_volt;
+    
+  // 0 - 255, such that analogWrite(255) requests a 100% duty cycle (always on), 
+  //and analogWrite(127) is a 50% duty cycle (on half the time) for example.
+  digitalWrite(left_voltageSign, left_spin_dir);
+  analogWrite(left_analogPin, left_pwmNum); 
+
+  digitalWrite(right_voltageSign, right_spin_dir);
+  analogWrite(right_analogPin, right_pwmNum); 
+
+  newRight = rightWheel.read();
+  newLeft = -1*leftWheel.read();
+
+  right_radian_actual = newRight * radian_per_count;
+  left_radian_actual = newLeft * radian_per_count;
+
+/*float delta_left_radian = left_radian_old - left_radian_actual;
+float delta_right_radian = right_radian_old - right_radian_actual; 
+
+ right_radian_per_second = delta_right_radian / sample_rate * 1000;
+ left_radian_per_second = delta_left_radian / sample_rate * 1000;
+
+ Serial.print("Left velocity: ");
+ Serial.print(left_radian_per_second);
+ Serial.print("\t Right velocity: ");
+ Serial.println(right_radian_per_second);*/
+  
+    Serial.println(" ");
+    Serial.print("Radian desired: ");
+    Serial.print(radial_dist);
+    Serial.print("\t Left Actual: ");
+    Serial.print(left_radian_actual);
+    Serial.print("\t Right Actual: ");
+    Serial.print(right_radian_actual);
+    Serial.print("\t Left error: ");
+    Serial.print(left_error);
+    Serial.print("\t Right error: ");
+    Serial.println(right_error);
+  
+  // Time taken at the end of the loop to determine the total time of the loop 
+  // Necessary for velocity calculations and to subtract from the total sampling interval time to maintain a consistent
+  // timed interval
+  long time_now = micros();
+  delta_t = time_now - time_old;
+  current_time = time_now / 1E6; 
+
+  micros_to_millis = (float) delta_t / 1000.0; 
+  
+  // There could be problems if the time through the loop is longer than the sampling rate. 
+  // If the time through the loop is longer than the sampling rate, prints out and error
+  // else delays for a time equal to the difference of the sampling rate and the time elapsed
+  if(micros_to_millis > sample_rate) {
+    Serial.println("ERROR: Loop time longer than sampling rate.");
+  } else {
+      delay(sample_rate - micros_to_millis);
+  }
+  }
+  left_integral = 0.0;
+  right_integral = 0.0;
+}
+
+void turn_fcn(int des_degree) {
+  right_error = 0.0;
+  left_error = 0.0;
+  //----------------------------------------------------------------------------------------------------------------
+  // sets the value for the sum of all error to zero, to avoid integration wind-up
+  // sets the current position of the wheels to zero
+  left_integral = 0.0;
+  right_integral = 0.0;
+  left_radian_actual = 0.0;
+  right_radian_actual = 0.0;
+  float phi_error = 0.0;
+  float phi_measured = 0.0;
+
+  //------------------------------------------------------------------------------------------------------------------
+  // conversion of degrees to radians
+  // calculation: radians = degrees * pi / 180
+
+  float phi_desired = (float) des_degree * pi / 180;
+  float l_phi_des = 0.0;
+  float r_phi_des = 0.0;
+
+
+  if (phi_desired < 0.0) {
+    r_phi_des = -2 * phi_desired;
+    l_phi_des = 2 * phi_desired;
+  } else {
+    r_phi_des = 2 * phi_desired;
+    l_phi_des = -2 * phi_desired;
+  }
+
+  while (abs(l_phi_des - abs(left_radian_actual)) > 0.3 && abs(r_phi_des - abs(right_radian_actual)) > 0.3) {
+    if (phi_desired == 0.0) {
+      break;
+    }
+    long time_old = micros();
+    int delta_t = 0;
+    float micros_to_millis = 0.0;
+
+    // Calcualtion of the motor voltage and PWM value determined by the error
+
+
+    right_error = r_phi_des - right_radian_actual;
+    left_error = l_phi_des - left_radian_actual;
+
+    left_integral = left_integral + (left_error * sample_rate / 1000);
+    right_integral = right_integral + (right_error * sample_rate / 1000);
+
+    float left_motor_volts = (float) left_error * (l_k_p_a + (left_integral * l_k_i_a));
+    float right_motor_volts = (float) right_error * (r_k_p_a + (right_integral * r_k_i_a));
+    
+
+    // determines the direction of the spin of the wheels, a positive value for the motor voltage will result in clockwise spin(HIGH)
+    // while a negative voltage will result in a CCW spin(LOW)
+    if (des_degree < 0.0) {
+      left_spin_dir = LOW;
+    }
+    else {
+      left_spin_dir = HIGH;
+    }
+
+    if (des_degree > 0.0) {
+      right_spin_dir = LOW;
+    }
+    else {
+      right_spin_dir = HIGH;
+    }
+
+    // Use this 'if' statement to act as a limiter to of the calculation of the motor voltage
+    // for the purpose of this assignment, the maximum voltage to the motor from the battery is 7.2 volts
+    // therefore, if the calculation of the motor voltage is greater than +7.2 volts or less than -7.2 volts,
+    // the voltage is limited to the maximum voltae available from the battery
+    if (left_motor_volts > 7.2) {
+      left_motor_volts = 7.2;
+    } else if (left_motor_volts < -7.2) {
+      left_motor_volts = -7.2;
+    }
+    if (right_motor_volts > 7.2) {
+      right_motor_volts = 7.2;
+    } else if (right_motor_volts < -7.2) {
+      right_motor_volts = -7.2;
+    }
+
+    // The PWM value must be a positive integer from 0-255. So the calculation need the absolute value of the motor voltage
+    // multiplied by the unit conversion of PWM value per volt
+    left_pwmNum = abs(left_motor_volts) * pwm_per_volt;
+    right_pwmNum = abs(right_motor_volts) * pwm_per_volt;
+
+    // 0 - 255, such that analogWrite(255) requests a 100% duty cycle (always on),
+    //and analogWrite(127) is a 50% duty cycle (on half the time) for example.
+    digitalWrite(left_voltageSign, left_spin_dir);
+    analogWrite(left_analogPin, left_pwmNum);
+
+    digitalWrite(right_voltageSign, right_spin_dir);
+    analogWrite(right_analogPin, right_pwmNum);
+
+    if (des_degree > 0.0) {
+      newRight = -1 * rightWheel.read();
+      newLeft = leftWheel.read();
+    }
+    else {
+      newRight = rightWheel.read();
+      newLeft = -1 * leftWheel.read();
+    }
+
+    right_radian_actual = newRight * radian_per_count;
+    left_radian_actual = newLeft * radian_per_count;
+
+    phi_measured = wheel_radius * ((right_radian_actual - left_radian_actual) / wheel_dist);
+
+    Serial.print("Phi desired: ");
+    Serial.print(phi_desired);
+    Serial.print("\t Phi measured: ");
+    Serial.println(phi_measured);
+    Serial.print("\t Right Desired: ");
+    Serial.print(r_phi_des);
+    Serial.print("\t Right radians: ");
+    Serial.print(right_radian_actual);
+    Serial.print("\t Right error: ");
+    Serial.print(right_error);
+    Serial.print("Left desired: ");
+    Serial.print(l_phi_des);
+    Serial.print("\t Left radians: ");
+    Serial.print(left_radian_actual);
+    Serial.print("\t Left error: ");
+    Serial.println(left_error);
+
+
+    // Time taken at the end of the loop to determine the total time of the loop
+    // Necessary for velocity calculations and to subtract from the total sampling interval time to maintain a consistent
+    // timed interval
+    long time_now = micros();
+    delta_t = time_now - time_old;
+    current_time = time_now / 1E6;
+    
+    micros_to_millis = (float) delta_t / 1000.0;
+    
+    // There could be problems if the time through the loop is longer than the sampling rate.
+    // If the time through the loop is longer than the sampling rate, prints out and error
+    // else delays for a time equal to the difference of the sampling rate and the time elapsed
+    if (micros_to_millis > sample_rate) {
+      Serial.println("ERROR: Loop time longer than sampling rate.");
+    } else {
+      delay(sample_rate - micros_to_millis);
+    }
+  }
+  delay(2000);
+  left_integral = 0.0;
+  right_integral = 0.0;
+  
+}
