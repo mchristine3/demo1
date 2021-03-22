@@ -1,0 +1,152 @@
+import board
+import busio
+import adafruit_character_lcd.character_lcd_rgb_i2c as character_lcd
+import cv2
+import numpy as np
+import cv2.aruco as aruco
+import matplotlib.pyplot as plt
+import time
+import math
+import imutils
+from imutils.video import VideoStream #pip3 install imutils
+
+def get_Angle():
+    dist = np.array([[0.19396467, - 1.16139471, - 0.00465488, 0.00251178, 2.46086765]], dtype=np.int)
+    dist = dist.reshape(1, 5, 1)
+    K = np.array([[622.29528929,0.,317.22251656],[0.,616.24482665,232.22185519],[0.,0.,1.]],dtype=np.float)
+    K = K.reshape(3, 3, 1)
+    usingPiCamera = True
+    frameSize = (640, 480)
+    vs = VideoStream(src=0, usePiCamera=usingPiCamera, resolution=frameSize, framerate=32).start()
+    time.sleep(2.0)
+
+    
+    while True:  # SUCCESS IS A BOOLEAN if successful in saving
+        image = vs.read()  # Goes through each frame and captures image in image
+        cv2.imshow("Camera",image)
+        #time.sleep(5)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        aruco_dict = aruco.Dictionary_get(aruco.DICT_6X6_250)
+        parameters = aruco.DetectorParameters_create()
+        corners, ids, rejectedImgPoints = aruco.detectMarkers(gray, aruco_dict, parameters=parameters)
+        corners = np.array(corners, dtype=np.float)
+        if ids == None:
+            print("No Markers Found")
+            if cv2.waitKey(1) & 0xFF == ord('q'):  # Runs and breaks video loop when q is pressed.
+                break
+        else:
+            for i in range(len(ids)):
+                c = corners[i][0]
+                plt.plot([c[:, 0].mean()], [c[:, 1].mean()], "+", label="id={0}".format(ids[i]))
+                corners = corners.reshape(4, 2, 1)
+                points_3d = np.array([[[-1.4375, 1.4375, 0.]], [[1.4375, 1.4375, 0.]], [[1.4375, -1.4375, 0.]], [[-1.4375, -1.4375, 0]]], dtype=np.float)
+                ret, rvecs, tvecs = cv2.solvePnP(points_3d, corners, K, dist)
+
+                angle_rad = math.atan((tvecs[0]/tvecs[2]))
+                angle_degree = ((angle_rad*180)/math.pi)
+                angle_degree = (-1*angle_degree)
+                stringang = str(angle_degree)
+                stringZ = str(tvecs[2])
+                stringX = str(tvecs[0])
+                
+                #modify this if you have a different sized character LCD
+                lcd_columns = 16
+                #the physical amount of columns/rows on the adafruit
+                lcd_rows = 2
+
+                #Initialize I2C Bus
+                i2c = busio.I2C(board.SCL, board.SDA)
+
+                #Initialize the LCD class
+                lcd = character_lcd.Character_LCD_RGB_I2C(i2c, lcd_columns, lcd_rows)
+
+                lcd.clear()
+
+                #Set LCD color to Purple
+                lcd.color = [50, 0, 50]
+                time.sleep(1)
+                
+                
+                anglee = str(angle_degree)
+                lcd.message= anglee
+                print(lcd.message)
+                
+                z = int(tvecs[2])
+                x = int(tvecs[0])
+                if -6 < z < 6:
+                    z = 0
+                elif -18 < z < -6:
+                    z = -12
+                elif 6<z<18:
+                    z=12
+                elif -30 < z < -18:
+                    z = -24
+                elif 18<z<30:
+                    z=24
+                elif -42 < z < -30:
+                    z = -36
+                elif 30<z<42:
+                    z=36
+                elif -54 < z < -42:
+                    z = -48
+                elif 42<z<54:
+                    z=48
+                elif -66 < z < -54:
+                    z = -60
+                elif 54<z<66:
+                    z=60
+                elif -78 < z < -66:
+                    z = -72
+                elif 66<z<78:
+                    z=72
+                elif -90 < z < -78:
+                    z = -84
+                elif 78<z<90:
+                    z=84
+                elif -102 < z < -90:
+                    z = -96
+                elif 90<z<102:
+                    z=96
+                
+                
+                if -6 < x < 6:
+                    x = 0
+                elif -18 < x < -6:
+                    x = -12
+                elif 6<x<18:
+                    x=12
+                elif -30 < x < -18:
+                    x = -24
+                elif 18<x<30:
+                    x=24
+                elif -42 < x < -30:
+                    x = -36
+                elif 30<z<42:
+                    x=36
+                elif -54 < x < -42:
+                    x = -48
+                elif 42<x<54:
+                    x=48
+                    
+                angle_radround = math.atan((x/z))
+                angle_degreeround = ((angle_radround*180)/math.pi)
+                stringangr = str(angle_degreeround)
+                stringZr = str(z)
+                stringXr = str(x)
+                
+                errorang = angle_degree - angle_degreeround
+                errorang = str(errorang)
+                
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                cv2.putText(image,stringang, (50, 50),font, 1,(0, 255, 255),2, cv2.LINE_4)
+                cv2.putText(image,stringZ, (50, 100),font, 1,(0, 0, 255),2, cv2.LINE_4)
+                cv2.putText(image,stringX, (50, 150),font, 1,(0, 255, 0),2, cv2.LINE_4)
+                cv2.putText(image,stringangr, (425, 50),font, 1,(255, 0, 0),2, cv2.LINE_4)
+                cv2.putText(image,stringZr, (325, 100),font, 1,(255, 0, 0),2, cv2.LINE_4)
+                cv2.putText(image,stringXr, (325, 150),font, 1,(255, 0, 0),2, cv2.LINE_4)
+                cv2.putText(image,errorang, (425, 100),font, 1,(203, 192,255),2, cv2.LINE_4)
+                cv2.imshow("Frame",image)
+            key = cv2.waitKey(1000) & 0xFF
+            if key == ord("q"):
+                break
+get_Angle()
